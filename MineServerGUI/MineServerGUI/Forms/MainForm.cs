@@ -54,18 +54,53 @@ namespace MineServerGUI.Forms
             bool hasValidProfile = false;
             if (_profileManager.Profiles.Count > 0)
             {
-                // Check if any profile has a valid JAR file
+                // Find the best profile (prefer meaningful names, valid JARs, recent modifications)
+                ServerProfile? bestProfile = null;
                 foreach (var profile in _profileManager.Profiles)
                 {
                     if (File.Exists(profile.ServerJarPath))
                     {
                         hasValidProfile = true;
-                        // Set the first valid profile as current
-                        if (_profileManager.CurrentProfile == null || !File.Exists(_profileManager.CurrentProfile.ServerJarPath))
+                        
+                        // Prefer profiles with meaningful names (not single characters like "t")
+                        if (profile.Name.Length > 1)
                         {
-                            _profileManager.SetCurrentProfile(profile.Id);
+                            if (bestProfile == null || 
+                                profile.LastModifiedDate > bestProfile.LastModifiedDate)
+                            {
+                                bestProfile = profile;
+                            }
                         }
-                        break;
+                        else if (bestProfile == null || bestProfile.Name.Length <= 1)
+                        {
+                            // Only use single-char names if no better option exists
+                            if (bestProfile == null || 
+                                profile.LastModifiedDate > bestProfile.LastModifiedDate)
+                            {
+                                bestProfile = profile;
+                            }
+                        }
+                    }
+                }
+                
+                // Set the best profile as current if found
+                if (bestProfile != null)
+                {
+                    if (_profileManager.CurrentProfile == null || 
+                        _profileManager.CurrentProfile.Id != bestProfile.Id)
+                    {
+                        _profileManager.SetCurrentProfile(bestProfile.Id);
+                    }
+                }
+                else if (hasValidProfile)
+                {
+                    // Fallback: use first valid profile
+                    var firstValid = _profileManager.Profiles.FirstOrDefault(p => File.Exists(p.ServerJarPath));
+                    if (firstValid != null && 
+                        (_profileManager.CurrentProfile == null || 
+                         _profileManager.CurrentProfile.Id != firstValid.Id))
+                    {
+                        _profileManager.SetCurrentProfile(firstValid.Id);
                     }
                 }
             }
@@ -107,6 +142,7 @@ namespace MineServerGUI.Forms
             SetupUpdateTimer();
             LoadConfiguration();
             UpdateUI();
+            UpdateProfileLabel(); // Update profile label after initialization
         }
 
         private void CheckServerSetup()
@@ -146,9 +182,10 @@ namespace MineServerGUI.Forms
             this.Font = new Font("Segoe UI", 9F);
 
             // Current Profile Label
+            // Current Profile Label - Will be updated after initialization
             _lblCurrentProfile = new Label
             {
-                Text = $"Profile: {_profileManager.CurrentProfile?.Name ?? "None"}",
+                Text = "Profile: Loading...",
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(33, 150, 243),
                 Location = new Point(20, 20),
@@ -629,21 +666,97 @@ namespace MineServerGUI.Forms
             _btnRestart!.Enabled = isRunning;
         }
 
-        private void BtnStart_Click(object? sender, EventArgs e)
+        private async void BtnStart_Click(object? sender, EventArgs e)
         {
             try
             {
-                if (_serverManager.JavaPath == null)
-                {
-                    MessageBox.Show("Java is not installed or not found!\n\nPlease install Java 21 or later from:\nhttps://adoptium.net/", 
-                        "Java Not Found", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
                 // Check if server JAR exists (use current profile's path)
                 var currentJarPath = _profileManager.CurrentProfile?.ServerJarPath 
                     ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server", "server.jar");
                 
+                // Detect MC version for Java requirement
+                string? mcVersion = null;
+                int requiredJavaVersion = 21; // Default
+                if (File.Exists(currentJarPath))
+                {
+                    try
+                    {
+                        mcVersion = ServerVersionDetector.DetectVersion(currentJarPath);
+                        if (!string.IsNullOrEmpty(mcVersion))
+                        {
+                            requiredJavaVersion = VersionHelper.GetRequiredJavaMajorVersion(mcVersion);
+                        }
+                    }
+                    catch { }
+                }
+
+                // Check Java compatibility
+                if (_serverManager.JavaPath == null)
+                {
+                    var result = MessageBox.Show(
+                        $"Java is not installed!\n\n" +
+                        (mcVersion != null ? $"Minecraft {mcVersion} requires Java {requiredJavaVersion}\n\n" : "") +
+                        "Would you like to download and install Java automatically?\n\n" +
+                        "(This will download ~200MB and install Java in the application directory)",
+                        "Java Not Found",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+
+                    if (result == DialogResult.Yes)
+                    {
+                        await DownloadJavaAsync(requiredJavaVersion, mcVersion);
+                        // Refresh Java path after installation
+                        _serverManager.RefreshJava();
+                        if (_serverManager.JavaPath == null)
+                        {
+                            MessageBox.Show("Java installation completed, but could not find Java path. Please restart the application.",
+                                "Installation Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                    }
+                    else
+                    {
+                        return; // User cancelled
+                    }
+                }
+                else
+                {
+                    // Check if Java version is compatible
+                    if (mcVersion != null)
+                    {
+                        var javaCheck = _serverManager.CheckJavaCompatibility(mcVersion);
+                        if (!javaCheck.IsCompatible)
+                        {
+                            var result = MessageBox.Show(
+                                $"Java version mismatch!\n\n" +
+                                $"Minecraft {mcVersion} requires Java {requiredJavaVersion}\n" +
+                                $"Current Java version: {javaCheck.CurrentVersion}\n\n" +
+                                "Would you like to download and install Java {requiredJavaVersion} automatically?\n\n" +
+                                "(This will download ~200MB and install Java in the application directory)",
+                                "Java Version Mismatch",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning);
+
+                            if (result == DialogResult.Yes)
+                            {
+                                await DownloadJavaAsync(requiredJavaVersion, mcVersion);
+                                // Refresh Java path after installation
+                                _serverManager.RefreshJava();
+                                if (_serverManager.JavaPath == null)
+                                {
+                                    MessageBox.Show("Java installation completed, but could not find Java path. Please restart the application.",
+                                        "Installation Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                return; // User cancelled
+                            }
+                        }
+                    }
+                }
+
                 if (!File.Exists(currentJarPath))
                 {
                     var result = MessageBox.Show(
@@ -1329,7 +1442,7 @@ namespace MineServerGUI.Forms
                 _profileManager.SetCurrentProfile(newProfile.Id);
                 _serverManager.SetProfile(newProfile);
                 _configManager.SetProfile(newProfile);
-                _lblCurrentProfile!.Text = $"Profile: {newProfile.Name}";
+                _lblCurrentProfile!.Text = $"Profile: {newProfile.Name} (v{newProfile.Version})";
                 LoadConfiguration();
                 UpdateUI();
                 
@@ -1342,10 +1455,104 @@ namespace MineServerGUI.Forms
             else
             {
                 // Profile list may have changed, refresh current profile display
-                if (_profileManager.CurrentProfile != null)
+                UpdateProfileLabel();
+            }
+        }
+
+        private void UpdateProfileLabel()
+        {
+            if (_lblCurrentProfile != null && _profileManager.CurrentProfile != null)
+            {
+                var profile = _profileManager.CurrentProfile;
+                _lblCurrentProfile.Text = $"Profile: {profile.Name} (v{profile.Version})";
+            }
+        }
+
+        private async Task DownloadJavaAsync(int version, string? mcVersion = null)
+        {
+            var downloadForm = new Form
+            {
+                Text = "Downloading Java",
+                Size = new Size(500, 150),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+
+            var lblStatus = new Label
+            {
+                Text = $"Downloading Java {version}...",
+                Location = new Point(20, 20),
+                Size = new Size(460, 20),
+                AutoSize = false
+            };
+            downloadForm.Controls.Add(lblStatus);
+
+            var progressBar = new ProgressBar
+            {
+                Location = new Point(20, 50),
+                Size = new Size(460, 23),
+                Style = ProgressBarStyle.Continuous,
+                Minimum = 0,
+                Maximum = 100
+            };
+            downloadForm.Controls.Add(progressBar);
+
+            var javaManager = new JavaManager();
+            bool downloadComplete = false;
+            Exception? downloadError = null;
+
+            var progress = new Progress<DownloadProgress>(p =>
+            {
+                if (downloadForm.IsDisposed || !downloadForm.IsHandleCreated)
+                    return;
+
+                lblStatus.Text = p.Status;
+                progressBar.Value = p.Progress;
+                Application.DoEvents();
+            });
+
+            // Start download in background
+            _ = Task.Run(async () =>
+            {
+                try
                 {
-                    _lblCurrentProfile!.Text = $"Profile: {_profileManager.CurrentProfile.Name}";
+                    await javaManager.DownloadAndInstallJavaAsync(version, progress);
+                    downloadComplete = true;
                 }
+                catch (Exception ex)
+                {
+                    downloadError = ex;
+                }
+                finally
+                {
+                    if (downloadForm.IsHandleCreated)
+                    {
+                        downloadForm.Invoke(new Action(() => downloadForm.Close()));
+                    }
+                }
+            });
+
+            downloadForm.ShowDialog(this);
+
+            if (downloadError != null)
+            {
+                MessageBox.Show(
+                    $"Error downloading Java:\n\n{downloadError.Message}\n\n" +
+                    "Please install Java manually from:\nhttps://adoptium.net/",
+                    "Download Failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            else if (downloadComplete)
+            {
+                MessageBox.Show(
+                    $"Java {version} has been installed successfully!\n\n" +
+                    "The application will now use the bundled Java runtime.",
+                    "Installation Complete",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             }
         }
     }

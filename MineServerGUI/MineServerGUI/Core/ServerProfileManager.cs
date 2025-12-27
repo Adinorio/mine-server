@@ -11,20 +11,24 @@ namespace MineServerGUI.Core
     {
         private readonly string _profilesDirectory;
         private readonly string _profilesConfigPath;
+        private readonly string _configPath;
         private List<ServerProfile> _profiles = new List<ServerProfile>();
         private ServerProfile? _currentProfile;
+        private string? _lastSelectedProfileId;
 
         public ServerProfileManager()
         {
             var baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..");
             _profilesDirectory = Path.Combine(baseDir, "server-profiles");
             _profilesConfigPath = Path.Combine(_profilesDirectory, "profiles.json");
+            _configPath = Path.Combine(_profilesDirectory, "profile-config.json");
             
             if (!Directory.Exists(_profilesDirectory))
             {
                 Directory.CreateDirectory(_profilesDirectory);
             }
             
+            LoadLastSelectedProfile();
             LoadProfiles();
         }
 
@@ -53,8 +57,61 @@ namespace MineServerGUI.Core
                 }
                 else
                 {
-                    // Load the first profile as current (or last used)
-                    _currentProfile = _profiles.FirstOrDefault();
+                    // Try to load the last selected profile first
+                    if (!string.IsNullOrEmpty(_lastSelectedProfileId))
+                    {
+                        var lastSelected = _profiles.FirstOrDefault(p => p.Id == _lastSelectedProfileId);
+                        if (lastSelected != null && File.Exists(lastSelected.ServerJarPath))
+                        {
+                            _currentProfile = lastSelected;
+                            System.Diagnostics.Debug.WriteLine($"[ServerProfileManager] Loaded last selected profile: {lastSelected.Name}");
+                            return;
+                        }
+                    }
+                    
+                    // If last selected doesn't exist or is invalid, select the best profile:
+                    // 1. Prefer profiles with valid JAR files
+                    // 2. Prefer profiles with meaningful names (not single characters)
+                    // 3. Prefer most recently modified
+                    ServerProfile? bestProfile = null;
+                    
+                    // First, try to find a profile with a valid JAR and meaningful name
+                    foreach (var profile in _profiles)
+                    {
+                        if (File.Exists(profile.ServerJarPath))
+                        {
+                            // Prefer profiles with names longer than 1 character (not "t", "a", etc.)
+                            if (profile.Name.Length > 1)
+                            {
+                                if (bestProfile == null || 
+                                    profile.LastModifiedDate > bestProfile.LastModifiedDate)
+                                {
+                                    bestProfile = profile;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If no good profile found, try any profile with valid JAR
+                    if (bestProfile == null)
+                    {
+                        bestProfile = _profiles.FirstOrDefault(p => File.Exists(p.ServerJarPath));
+                    }
+                    
+                    // If still no profile, use the most recently modified
+                    if (bestProfile == null)
+                    {
+                        bestProfile = _profiles.OrderByDescending(p => p.LastModifiedDate).FirstOrDefault();
+                    }
+                    
+                    // Fallback to first profile
+                    _currentProfile = bestProfile ?? _profiles.FirstOrDefault();
+                    
+                    // Save the selected profile as last selected
+                    if (_currentProfile != null)
+                    {
+                        SaveLastSelectedProfile(_currentProfile.Id);
+                    }
                 }
             }
             catch
@@ -126,6 +183,10 @@ namespace MineServerGUI.Core
             _profiles.Add(profile);
             SaveProfiles();
             
+            // Set as current and remember selection
+            _currentProfile = profile;
+            SaveLastSelectedProfile(profile.Id);
+            
             return profile;
         }
 
@@ -173,6 +234,7 @@ namespace MineServerGUI.Core
             }
 
             _currentProfile = profile;
+            SaveLastSelectedProfile(profileId); // Remember this selection
             SaveProfiles();
         }
 
@@ -199,6 +261,57 @@ namespace MineServerGUI.Core
             var invalidChars = Path.GetInvalidFileNameChars();
             return string.Join("_", fileName.Split(invalidChars, StringSplitOptions.RemoveEmptyEntries))
                 .TrimEnd('.');
+        }
+
+        /// <summary>
+        /// Loads the last selected profile ID from config
+        /// </summary>
+        private void LoadLastSelectedProfile()
+        {
+            try
+            {
+                if (File.Exists(_configPath))
+                {
+                    var json = File.ReadAllText(_configPath);
+                    var config = JsonConvert.DeserializeObject<ProfileConfig>(json);
+                    if (config != null && !string.IsNullOrEmpty(config.LastSelectedProfileId))
+                    {
+                        _lastSelectedProfileId = config.LastSelectedProfileId;
+                        System.Diagnostics.Debug.WriteLine($"[ServerProfileManager] Loaded last selected profile ID: {_lastSelectedProfileId}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ServerProfileManager] Failed to load last selected profile: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Saves the last selected profile ID to config
+        /// </summary>
+        private void SaveLastSelectedProfile(string profileId)
+        {
+            try
+            {
+                _lastSelectedProfileId = profileId;
+                var config = new ProfileConfig
+                {
+                    LastSelectedProfileId = profileId
+                };
+                var json = JsonConvert.SerializeObject(config, Formatting.Indented);
+                File.WriteAllText(_configPath, json);
+                System.Diagnostics.Debug.WriteLine($"[ServerProfileManager] Saved last selected profile ID: {profileId}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ServerProfileManager] Failed to save last selected profile: {ex.Message}");
+            }
+        }
+
+        private class ProfileConfig
+        {
+            public string? LastSelectedProfileId { get; set; }
         }
     }
 }
