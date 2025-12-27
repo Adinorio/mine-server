@@ -1,0 +1,67 @@
+# Minecraft Server Properties
+# Compatible with TLauncher and Minecraft 1.21.1
+
+# Server Settings
+motd=A Minecraft Server
+max-players=20
+online-mode=false
+white-list=false
+pvp=true
+difficulty=normal
+gamemode=survival
+force-gamemode=false
+hardcore=false
+enable-command-block=true
+max-world-size=29999984
+
+# Network Settings
+server-port=25565
+server-ip=
+network-compression-threshold=256
+max-tick-time=60000
+use-native-transport=true
+enable-status=true
+enforce-whitelist=false
+
+# World Settings
+level-name=world
+level-seed=
+level-type=minecraft\:normal
+generate-structures=true
+generator-settings={}
+allow-flight=false
+spawn-monsters=true
+spawn-animals=true
+spawn-npcs=true
+spawn-protection=16
+
+# Resource Pack
+resource-pack=
+resource-pack-prompt=
+resource-pack-sha1=
+
+# Performance
+view-distance=10
+simulation-distance=10
+max-chained-neighbor-updates=1000000
+entity-broadcast-range-percentage=100
+player-idle-timeout=0
+
+# Other
+enforce-secure-profile=false
+log-ips=true
+function-permission-level=2
+op-permission-level=4
+max-build-height=384
+
+
+
+
+
+
+
+
+
+
+
+
