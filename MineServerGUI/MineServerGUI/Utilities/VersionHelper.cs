@@ -68,24 +68,93 @@ namespace MineServerGUI.Utilities
                 return "Unknown";
 
             // Java version requirements based on Minecraft versions
-            // 1.18+ requires Java 17+
+            // 1.20.6+ and 1.21+ requires Java 21+ (Minecraft 1.20.6, 1.21.x, 1.22.x, etc.)
+            if (version.Major == 1 && version.Minor >= 21)
+                return "Java 21";
+            
+            if (version.Major == 1 && version.Minor == 20 && version.Patch >= 6)
+                return "Java 21";
+
+            // 1.18 - 1.20.5 requires Java 17+
             if (version.Major == 1 && version.Minor >= 18)
-                return "Java 17 or later";
+            {
+                if (version.Minor == 20 && version.Patch < 6)
+                    return "Java 17";
+                if (version.Minor < 20)
+                    return "Java 17";
+            }
 
             // 1.17 requires Java 16+
             if (version.Major == 1 && version.Minor == 17)
-                return "Java 16 or later";
+                return "Java 16";
 
             // 1.12 - 1.16 requires Java 8+
             if (version.Major == 1 && version.Minor >= 12 && version.Minor <= 16)
-                return "Java 8 or later";
+                return "Java 8";
 
             // 1.8 - 1.11 requires Java 8
             if (version.Major == 1 && version.Minor >= 8 && version.Minor <= 11)
                 return "Java 8";
 
-            // Older versions
+            // 1.0 - 1.7 requires Java 8 (older versions work with Java 8)
+            if (version.Major == 1 && version.Minor < 8)
+                return "Java 8";
+
+            // Future versions (2.x, etc.) - default to Java 21 (most modern)
+            if (version.Major >= 2)
+                return "Java 21";
+
+            // Older versions (pre-1.0) - default to Java 8
             return "Java 8";
+        }
+
+        /// <summary>
+        /// Gets the minimum Java major version number required (8, 16, 17, or 21)
+        /// </summary>
+        public static int GetRequiredJavaMajorVersion(string minecraftVersion)
+        {
+            if (string.IsNullOrEmpty(minecraftVersion))
+                return 21; // Default to most modern for unknown versions
+
+            var version = ParseVersion(minecraftVersion);
+            if (version == null)
+                return 21; // Default to most modern for unparseable versions
+
+            // Direct version-based mapping (more reliable than string parsing)
+            // 1.20.6+ and 1.21+ requires Java 21
+            if (version.Major == 1 && version.Minor >= 21)
+                return 21;
+            
+            if (version.Major == 1 && version.Minor == 20 && version.Patch >= 6)
+                return 21;
+
+            // 1.18 - 1.20.5 requires Java 17
+            if (version.Major == 1 && version.Minor >= 18)
+            {
+                if (version.Minor == 20 && version.Patch < 6)
+                    return 17;
+                if (version.Minor < 20)
+                    return 17;
+            }
+
+            // 1.17 requires Java 16
+            if (version.Major == 1 && version.Minor == 17)
+                return 16;
+
+            // 1.8 - 1.16 requires Java 8
+            if (version.Major == 1 && version.Minor >= 8 && version.Minor <= 16)
+                return 8;
+
+            // 1.0 - 1.7 requires Java 8
+            if (version.Major == 1 && version.Minor < 8)
+                return 8;
+
+            // Future versions (2.x+) - default to Java 21
+            if (version.Major >= 2)
+                return 21;
+
+            // Default fallback to Java 8 (safest for older versions)
+            return 8;
         }
 
         private static VersionInfo? ParseVersion(string versionString)

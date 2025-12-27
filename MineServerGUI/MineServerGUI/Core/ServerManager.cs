@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using MineServerGUI.Models;
+using MineServerGUI.Utilities;
 
 namespace MineServerGUI.Core
 {
@@ -20,8 +21,11 @@ namespace MineServerGUI.Core
         public string MaxMemory { get; set; } = "4G";
         public ServerProfile? CurrentProfile => _currentProfile;
 
+        private readonly JavaManager _javaManager;
+
         public ServerManager()
         {
+            _javaManager = new JavaManager();
             FindJava();
         }
 
@@ -41,41 +45,34 @@ namespace MineServerGUI.Core
 
         private void FindJava()
         {
-            // Try common Java locations
-            string[] javaLocations = {
-                @"C:\Program Files\Java\jdk-25\bin\java.exe",
-                @"C:\Program Files\Java\jdk-21\bin\java.exe",
-                @"C:\Program Files\Eclipse Adoptium\jdk-25-hotspot\bin\java.exe",
-                @"C:\Program Files\Eclipse Adoptium\jdk-21-hotspot\bin\java.exe"
-            };
+            // Use JavaManager to find Java (checks bundled first, then system)
+            JavaPath = _javaManager.FindJava();
+        }
 
-            foreach (var location in javaLocations)
-            {
-                if (File.Exists(location))
-                {
-                    JavaPath = location;
-                    return;
-                }
-            }
+        /// <summary>
+        /// Refreshes Java path (public method for UI to call after Java installation)
+        /// </summary>
+        public void RefreshJava()
+        {
+            FindJava();
+        }
 
-            // Try PATH
-            try
-            {
-                var process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "java",
-                    Arguments = "-version",
-                    UseShellExecute = false,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                });
-                process?.WaitForExit();
-                JavaPath = "java";
-            }
-            catch
-            {
-                JavaPath = null;
-            }
+        /// <summary>
+        /// Finds Java for a specific Minecraft version requirement
+        /// </summary>
+        public string? FindJavaForVersion(string minecraftVersion)
+        {
+            var requiredJava = VersionHelper.GetRequiredJavaMajorVersion(minecraftVersion);
+            return _javaManager.FindJava(requiredJava);
+        }
+
+        /// <summary>
+        /// Checks if Java is compatible and offers to download if needed
+        /// </summary>
+        public JavaCheckResult CheckJavaCompatibility(string minecraftVersion)
+        {
+            var requiredJava = VersionHelper.GetRequiredJavaMajorVersion(minecraftVersion);
+            return _javaManager.CheckJava(requiredJava, JavaPath);
         }
 
         public void StartServer()
@@ -94,6 +91,9 @@ namespace MineServerGUI.Core
             {
                 throw new FileNotFoundException($"Server JAR not found: {_serverJar}");
             }
+
+            // Validate Java version compatibility with Minecraft version
+            ValidateJavaVersion();
 
             var serverDir = Path.GetFullPath(_serverPath);
             if (!Directory.Exists(serverDir))
@@ -119,6 +119,62 @@ namespace MineServerGUI.Core
             {
                 throw new Exception("Failed to start server process!");
             }
+        }
+
+        /// <summary>
+        /// Validates that the current Java version is compatible with the Minecraft server version
+        /// </summary>
+        private void ValidateJavaVersion()
+        {
+            if (JavaPath == null)
+                return; // Already handled in StartServer
+
+            // Detect Minecraft version from server.jar
+            var mcVersion = ServerVersionDetector.DetectVersion(_serverJar, JavaPath);
+            if (string.IsNullOrEmpty(mcVersion))
+            {
+                // Can't detect version, skip validation
+                System.Diagnostics.Debug.WriteLine("[ServerManager] Could not detect MC version, skipping Java validation");
+                return;
+            }
+
+            // Get required Java version for this MC version
+            var requiredJava = VersionHelper.GetRequiredJavaVersion(mcVersion);
+            var requiredJavaMajor = VersionHelper.GetRequiredJavaMajorVersion(mcVersion);
+
+            // Get current Java version
+            var currentJavaMajor = JavaVersionChecker.GetJavaMajorVersion(JavaPath);
+            
+            if (currentJavaMajor == 0)
+            {
+                // Could not detect Java version, show warning but continue
+                System.Diagnostics.Debug.WriteLine($"[ServerManager] Could not detect Java version, but JavaPath exists: {JavaPath}");
+                return;
+            }
+
+            // Check compatibility
+            if (currentJavaMajor < requiredJavaMajor)
+            {
+                var downloadUrl = requiredJavaMajor == 21 
+                    ? "https://adoptium.net/temurin/releases/?version=21"
+                    : requiredJavaMajor == 17
+                    ? "https://adoptium.net/temurin/releases/?version=17"
+                    : "https://adoptium.net/temurin/releases/";
+
+                throw new InvalidOperationException(
+                    $"Java version mismatch!\n\n" +
+                    $"Minecraft {mcVersion} requires {requiredJava}\n" +
+                    $"Current Java version: {currentJavaMajor}\n\n" +
+                    $"Please install {requiredJava}:\n" +
+                    $"1. Go to: {downloadUrl}\n" +
+                    $"2. Download JDK {requiredJavaMajor} for Windows x64\n" +
+                    $"3. Install it (you can keep other Java versions)\n" +
+                    $"4. Restart the application\n\n" +
+                    $"Note: Multiple Java versions can coexist on your system."
+                );
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[ServerManager] Java version check passed: MC {mcVersion} requires {requiredJava}, found Java {currentJavaMajor}");
         }
 
         public void StopServer()
