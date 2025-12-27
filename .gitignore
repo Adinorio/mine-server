@@ -1,0 +1,88 @@
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# NuGet Packages
+*.nupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Rider
+.idea/
+*.sln.iml
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Large server files - DO NOT COMMIT
+# Root-level server directory (contains world, server.jar, logs, libraries, etc.)
+/server/
+
+# Exception: Allow MineServerGUI's server directory (needed for the application)
+!MineServerGUI/MineServerGUI/server/
+
+# Server JAR files in other locations (root /server/ already covered above)
+**/server.jar
+versions/**/*.jar
+
+# Backups (can be very large)
+backups/
+**/backups/
+
+# Server logs and crash reports (root /server/ already covered above)
+**/logs/
+**/*.log
+**/*.log.gz
+
+# Geyser directory (entire directory ignored)
+geyser/
+
+# Server libraries (downloaded automatically, root /server/ already covered above)
+libraries/
+
+# Server cache and temp files (root /server/ already covered above)
+**/cache/
+*.cache
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# Executables and binaries
+cloudflared.exe
+
+# OS files
+.DS_Store
+Thumbs.db
