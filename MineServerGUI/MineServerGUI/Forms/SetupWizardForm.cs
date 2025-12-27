@@ -102,7 +102,7 @@ namespace MineServerGUI.Forms
             var selectFilePanel = new Panel
             {
                 Location = new Point(25, 80),
-                Size = new Size(500, 85),
+                Size = new Size(500, 90),
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -113,8 +113,8 @@ namespace MineServerGUI.Forms
                 Text = "Use Existing Server.jar",
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 Location = new Point(15, 10),
-                Size = new Size(350, 20),
-                AutoSize = true
+                Size = new Size(300, 20),
+                AutoSize = false
             };
             selectFilePanel.Controls.Add(lblSelectFile);
 
@@ -123,7 +123,7 @@ namespace MineServerGUI.Forms
                 Text = "If you already have a server.jar file on your computer:",
                 Font = new Font("Segoe UI", 9F),
                 ForeColor = Color.Gray,
-                Location = new Point(15, 35),
+                Location = new Point(15, 32),
                 Size = new Size(320, 15),
                 AutoSize = true
             };
@@ -136,7 +136,7 @@ namespace MineServerGUI.Forms
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
                 ForeColor = Color.FromArgb(76, 175, 80),
                 Location = new Point(15, 55),
-                Size = new Size(380, 20),
+                Size = new Size(320, 20),
                 AutoSize = false,
                 Visible = false
             };
@@ -248,13 +248,14 @@ namespace MineServerGUI.Forms
             };
             contentPanel.Controls.Add(_progressBar);
 
-            // Cancel button
+            // Cancel button (disabled initially - only enabled when file/download is selected)
             _btnCancel = new Button
             {
                 Text = "Cancel",
                 Location = new Point(440, 288),
                 Size = new Size(70, 32),
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
                 // Don't set DialogResult here - let CancelSetup handle it
             };
             _btnCancel.Click += (s, e) => { CancelSetup(); };
@@ -313,17 +314,64 @@ namespace MineServerGUI.Forms
 
         private void CancelSetup()
         {
-            var result = MessageBox.Show(
-                "Cancel setup and exit the application?",
-                "Cancel Setup",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (result == DialogResult.Yes)
+            // Reset the form to allow user to select a different file or version
+            SelectedServerJarPath = null;
+            DetectedVersion = null;
+            RequestedVersion = null;
+            
+            // Hide selected file label
+            if (_lblSelectedFile != null)
             {
-                this.DialogResult = DialogResult.Cancel;
-                this.Close();
+                _lblSelectedFile.Visible = false;
+                _lblSelectedFile.Text = "";
             }
+            
+            // Reset status message
+            if (_lblStatus != null)
+            {
+                _lblStatus.Text = "Choose an option above to continue";
+                _lblStatus.ForeColor = Color.FromArgb(100, 100, 100);
+            }
+            
+            // Hide progress bar
+            if (_progressBar != null)
+            {
+                _progressBar.Visible = false;
+                _progressBar.Value = 0;
+            }
+            
+            // Hide Next button
+            if (_btnNext != null)
+            {
+                _btnNext.Visible = false;
+                _btnNext.Enabled = false;
+            }
+            
+            // Re-enable all buttons and controls
+            if (_btnSelectFile != null)
+                _btnSelectFile.Enabled = true;
+            if (_btnDownload != null)
+                _btnDownload.Enabled = true;
+            if (_cmbVersion != null)
+            {
+                _cmbVersion.Enabled = true;
+                // Reset version selection to first item if available
+                if (_cmbVersion.Items.Count > 0 && _cmbVersion.Items[0]?.ToString() != "Loading versions...")
+                {
+                    _cmbVersion.SelectedIndex = 0;
+                }
+            }
+            if (_btnCancel != null)
+                _btnCancel.Enabled = false; // Disable Cancel after reset (nothing to cancel)
+            
+            // Reset download state
+            _isDownloading = false;
+            
+            // Reset setup complete flag
+            SetupComplete = false;
+            
+            // Force UI update
+            Application.DoEvents();
         }
 
         private async void LoadAvailableVersions()
@@ -390,9 +438,35 @@ namespace MineServerGUI.Forms
             using var openFileDialog = new OpenFileDialog
             {
                 Filter = "Minecraft Server|server.jar|JAR Files|*.jar|All Files|*.*",
-                Title = "Select Minecraft Server JAR File",
+                Title = "Select Minecraft Server JAR File (You can change the server JAR at any time)",
                 CheckFileExists = true
             };
+            
+            // Set initial directory to common server locations
+            var commonPaths = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Minecraft Server"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server"),
+                AppDomain.CurrentDomain.BaseDirectory
+            };
+            
+            foreach (var path in commonPaths)
+            {
+                if (Directory.Exists(path))
+                {
+                    openFileDialog.InitialDirectory = path;
+                    break;
+                }
+            }
+            
+            // If there's an existing server.jar, pre-select it
+            var existingServerJar = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server", "server.jar");
+            if (File.Exists(existingServerJar))
+            {
+                openFileDialog.InitialDirectory = Path.GetDirectoryName(existingServerJar);
+                openFileDialog.FileName = Path.GetFileName(existingServerJar);
+            }
 
             if (openFileDialog.ShowDialog() == DialogResult.OK)
             {
@@ -486,6 +560,7 @@ namespace MineServerGUI.Forms
                             _btnNext.Enabled = true;
                             _btnSelectFile!.Enabled = false;
                             _btnDownload!.Enabled = false;
+                            _btnCancel!.Enabled = true; // Enable Cancel when file is selected
                         }
                         else if (result == DialogResult.No)
                         {
@@ -541,12 +616,14 @@ namespace MineServerGUI.Forms
                             _btnNext.Enabled = true;
                             _btnSelectFile!.Enabled = false;
                             _btnDownload!.Enabled = false;
+                            _btnCancel!.Enabled = true; // Enable Cancel when file is selected
                         }
                         else
                         {
                             _btnSelectFile.Enabled = true;
                             _btnDownload.Enabled = true;
                             _cmbVersion!.Enabled = true;
+                            _btnCancel!.Enabled = false; // Keep Cancel disabled if user didn't confirm
                             _lblSelectedFile.Visible = false;
                             _lblStatus.Text = "Choose an option above to continue";
                             _lblStatus.ForeColor = Color.FromArgb(100, 100, 100);
@@ -603,8 +680,14 @@ namespace MineServerGUI.Forms
                 RequestedVersion = selectedVersion;
                 System.Diagnostics.Debug.WriteLine($"[SetupWizardForm] User selected version: '{RequestedVersion}'");
                 
-                // Store the status message before download to check if cache was used
-                string? statusBeforeDownload = _lblStatus?.Text;
+                // Set initial status - downloader will update via DownloadProgress events
+                // ServerDownloader is the single source of truth for cache checking
+                _lblStatus!.Text = "Checking cache and preparing download...";
+                _lblStatus.ForeColor = Color.FromArgb(100, 100, 100);
+                Application.DoEvents();
+                
+                // DownloadServerJarAsync will check cache internally and communicate status via DownloadProgress events
+                // Forms should trust the event system, not pre-check cache
                 await _downloader.DownloadServerJarAsync(selectedVersion, overwrite: true);
                 
                 if (IsDisposed || !IsHandleCreated)
@@ -621,7 +704,7 @@ namespace MineServerGUI.Forms
                 // Update UI to show success and enable Next button
                 if (wasFromCache)
                 {
-                    _lblStatus!.Text = $"✓ Using cached version {selectedVersion}! Click Next to continue.";
+                    _lblStatus!.Text = $"✓ Using cached version {selectedVersion} (no download needed)! Click Next to continue.";
                 }
                 else
                 {
@@ -653,7 +736,7 @@ namespace MineServerGUI.Forms
                 _btnDownload.Enabled = true;
                 _btnSelectFile.Enabled = true;
                 _cmbVersion!.Enabled = true;
-                _btnCancel.Enabled = true;
+                _btnCancel.Enabled = false; // Keep Cancel disabled on download error (nothing selected)
                 _progressBar.Visible = false;
             }
             finally

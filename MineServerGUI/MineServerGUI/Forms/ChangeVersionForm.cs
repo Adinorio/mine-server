@@ -95,7 +95,7 @@ namespace MineServerGUI.Forms
 
             var lblSelectFile = new Label
             {
-                Text = "Use Existing Server.jar",
+                Text = "Use Existing Server.jar (Browse or Change)",
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 Location = new Point(10, 10),
                 AutoSize = true
@@ -104,10 +104,10 @@ namespace MineServerGUI.Forms
 
             var lblSelectFileDesc = new Label
             {
-                Text = "If you already have a server.jar file on your computer:",
+                Text = "Browse to select a different server.jar file from your computer.\nYou can change the server JAR at any time, even after setup.",
                 Location = new Point(10, 30),
-                Size = new Size(350, 20),
-                AutoSize = true
+                Size = new Size(520, 40),
+                AutoSize = false
             };
             selectFilePanel.Controls.Add(lblSelectFileDesc);
 
@@ -346,8 +346,43 @@ namespace MineServerGUI.Forms
             var openFileDialog = new OpenFileDialog
             {
                 Filter = "Minecraft Server|server.jar|JAR Files|*.jar|All Files|*.*",
-                Title = "Select Minecraft Server JAR File"
+                Title = "Select Minecraft Server JAR File (You can change the server JAR at any time)",
+                CheckFileExists = true
             };
+            
+            // Set initial directory to current server directory or common locations
+            if (!string.IsNullOrEmpty(_serverDirectory) && Directory.Exists(_serverDirectory))
+            {
+                openFileDialog.InitialDirectory = _serverDirectory;
+                if (File.Exists(_currentServerJarPath))
+                {
+                    openFileDialog.FileName = Path.GetFileName(_currentServerJarPath);
+                }
+            }
+            else if (File.Exists(_currentServerJarPath))
+            {
+                openFileDialog.InitialDirectory = Path.GetDirectoryName(_currentServerJarPath);
+                openFileDialog.FileName = Path.GetFileName(_currentServerJarPath);
+            }
+            else
+            {
+                // Try common server locations
+                var commonPaths = new[]
+                {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Minecraft Server"),
+                    AppDomain.CurrentDomain.BaseDirectory
+                };
+                
+                foreach (var path in commonPaths)
+                {
+                    if (Directory.Exists(path))
+                    {
+                        openFileDialog.InitialDirectory = path;
+                        break;
+                    }
+                }
+            }
 
             if (openFileDialog.ShowDialog() == DialogResult.OK)
             {
@@ -473,11 +508,15 @@ namespace MineServerGUI.Forms
                 // Debug: Verify version is being passed correctly
                 System.Diagnostics.Debug.WriteLine($"[ChangeVersionForm] User selected version: '{_requestedVersion}'");
                 
-                _lblStatus!.Text = $"Downloading version {_requestedVersion}...";
+                // Set initial status - downloader will update via DownloadProgress events
+                // ServerDownloader is the single source of truth for cache checking
+                // This ensures cache logic exists in one place and prevents inconsistency
+                _lblStatus!.Text = "Checking cache and preparing download...";
                 _lblStatus.ForeColor = Color.FromArgb(100, 100, 100);
+                Application.DoEvents();
 
-                // Always overwrite when downloading a specific version
-                // Pass the exact version the user selected - no default fallback
+                // DownloadServerJarAsync will check cache internally and communicate status via DownloadProgress events
+                // Forms should trust the event system, not pre-check cache
                 System.Diagnostics.Debug.WriteLine($"[ChangeVersionForm] Calling DownloadServerJarAsync with version='{_requestedVersion}', overwrite=true");
                 await _downloader.DownloadServerJarAsync(_requestedVersion, overwrite: true);
 
@@ -580,7 +619,8 @@ namespace MineServerGUI.Forms
                 DetectedVersion = _requestedVersion; // ✅ Use stored _requestedVersion, not local selectedVersion
                 NewServerJarPath = finalPath; // Use the verified path
                 
-                // Check if this was from cache (status message will contain "cache" or "cached")
+                // Check if this was from cache by examining status message from DownloadProgress events
+                // ServerDownloader communicates cache status via events - this is the single source of truth
                 var wasFromCache = _lblStatus!.Text.Contains("cache", StringComparison.OrdinalIgnoreCase) ||
                                    _lblStatus.Text.Contains("cached", StringComparison.OrdinalIgnoreCase);
                 
@@ -648,11 +688,39 @@ namespace MineServerGUI.Forms
             if (string.IsNullOrEmpty(NewServerJarPath) || !File.Exists(NewServerJarPath))
             {
                 MessageBox.Show(
-                    "No server JAR file selected or file not found.",
-                    "Error",
+                    "No server JAR file selected or file not found.\n\n" +
+                    "Please:\n" +
+                    "• Click 'Browse' to select an existing server.jar file, OR\n" +
+                    "• Select a version and click 'Download' to download a new server JAR",
+                    "No Server JAR Selected",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 return;
+            }
+            
+            // Check if the selected file is the same as the current one
+            if (File.Exists(_currentServerJarPath))
+            {
+                try
+                {
+                    var currentFullPath = Path.GetFullPath(_currentServerJarPath);
+                    var newFullPath = Path.GetFullPath(NewServerJarPath);
+                    
+                    if (currentFullPath.Equals(newFullPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show(
+                            "The selected server JAR is the same as the current one.\n\n" +
+                            "No changes will be made.",
+                            "No Change",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                        return;
+                    }
+                }
+                catch
+                {
+                    // If path comparison fails, continue anyway
+                }
             }
 
             // Get current version from label
