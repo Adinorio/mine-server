@@ -22,9 +22,16 @@ namespace MineServerGUI.Forms
         public int MaxPlayers { get; private set; } = 8;
         public string Difficulty { get; private set; } = "normal";
         public string Gamemode { get; private set; } = "survival";
+        
+        private readonly string? _targetServerDirectory; // Profile-specific directory
 
-        public ServerSetupForm()
+        /// <summary>
+        /// Creates a server setup form for a specific profile directory
+        /// </summary>
+        /// <param name="serverDirectory">The server directory where files should be created (profile-specific)</param>
+        public ServerSetupForm(string? serverDirectory = null)
         {
+            _targetServerDirectory = serverDirectory;
             InitializeComponent();
         }
 
@@ -240,7 +247,10 @@ namespace MineServerGUI.Forms
 
             try
             {
-                var serverDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server");
+                // Use profile-specific directory if provided, otherwise use default
+                var serverDir = _targetServerDirectory 
+                    ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server");
+                    
                 if (!Directory.Exists(serverDir))
                 {
                     Directory.CreateDirectory(serverDir);
@@ -286,7 +296,10 @@ namespace MineServerGUI.Forms
 
             try
             {
-                var serverDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server");
+                // Use profile-specific directory if provided, otherwise use default
+                var serverDir = _targetServerDirectory 
+                    ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server");
+                    
                 if (!Directory.Exists(serverDir))
                 {
                     Directory.CreateDirectory(serverDir);

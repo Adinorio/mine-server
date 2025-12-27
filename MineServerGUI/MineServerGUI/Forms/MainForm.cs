@@ -112,8 +112,15 @@ namespace MineServerGUI.Forms
                 _configManager.SetProfile(_profileManager.CurrentProfile);
             }
             
-            // Only show setup wizard if there are NO valid profiles with JAR files
-            if (!hasValidProfile)
+            // Show setup wizard if:
+            // 1. No profiles exist at all, OR
+            // 2. Current profile is null, OR
+            // 3. Current profile exists but has no valid JAR file
+            bool needsSetup = _profileManager.Profiles.Count == 0 || 
+                             _profileManager.CurrentProfile == null ||
+                             !File.Exists(_profileManager.CurrentProfile.ServerJarPath);
+            
+            if (needsSetup)
             {
                 CheckServerSetup();
                 
@@ -159,8 +166,47 @@ namespace MineServerGUI.Forms
                 return;
             }
 
-            // Step 2: Server Setup (EULA + Configuration)
-            var serverSetup = new ServerSetupForm();
+            // Create default profile for initial setup
+            string? version = setupWizard.RequestedVersion ?? setupWizard.DetectedVersion;
+            if (string.IsNullOrEmpty(version) && !string.IsNullOrEmpty(setupWizard.SelectedServerJarPath))
+            {
+                // Try to detect version if not available
+                try
+                {
+                    version = ServerVersionDetector.DetectVersion(setupWizard.SelectedServerJarPath);
+                }
+                catch
+                {
+                    version = "Unknown";
+                }
+            }
+            
+            var defaultProfile = _profileManager.CreateProfile(
+                "Default Server",
+                version ?? "Unknown",
+                "Default server profile"
+            );
+
+            // Copy server.jar to profile directory if it's in a different location
+            if (File.Exists(setupWizard.SelectedServerJarPath))
+            {
+                if (!Directory.Exists(defaultProfile.ServerDirectory))
+                {
+                    Directory.CreateDirectory(defaultProfile.ServerDirectory);
+                }
+                
+                // Only copy if the source is different from the target
+                var sourcePath = Path.GetFullPath(setupWizard.SelectedServerJarPath);
+                var targetPath = Path.GetFullPath(defaultProfile.ServerJarPath);
+                
+                if (!sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(setupWizard.SelectedServerJarPath, defaultProfile.ServerJarPath, true);
+                }
+            }
+
+            // Step 2: Server Setup (EULA + Configuration) - Profile-aware
+            var serverSetup = new ServerSetupForm(defaultProfile.ServerDirectory);
             var setupResult = serverSetup.ShowDialog();
             
             // If server setup was cancelled, exit application
@@ -169,6 +215,9 @@ namespace MineServerGUI.Forms
                 Application.Exit();
                 return;
             }
+            
+            // Profile is now set as current and has all files initialized
+            // The profile was already saved by CreateProfile(), so it will persist
         }
 
         private void InitializeComponent()
