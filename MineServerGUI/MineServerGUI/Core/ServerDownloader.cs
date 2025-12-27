@@ -20,14 +20,23 @@ namespace MineServerGUI.Core
 
         public ServerDownloader()
         {
-            _serverPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "server");
+            // Use absolute paths to ensure consistency across different execution contexts
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var serverPathRelative = Path.Combine(baseDir, "..", "..", "..", "server");
+            _serverPath = Path.GetFullPath(serverPathRelative); // Convert to absolute path
             _serverJar = Path.Combine(_serverPath, "server.jar");
             _cachePath = Path.Combine(_serverPath, "cache");
+            
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Initialized:");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Base directory: {baseDir}");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Server path (absolute): {_serverPath}");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache path (absolute): {_cachePath}");
             
             // Ensure cache directory exists
             if (!Directory.Exists(_cachePath))
             {
                 Directory.CreateDirectory(_cachePath);
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Created cache directory: {_cachePath}");
             }
         }
 
@@ -68,20 +77,32 @@ namespace MineServerGUI.Core
             // Normalize version before checking (trim whitespace)
             var normalizedVersion = version.Trim();
             var cachedPath = GetCachePathForVersion(normalizedVersion);
-            var exists = File.Exists(cachedPath);
+            
+            // Try both relative and absolute paths to ensure we find the cache
+            var absoluteCachePath = Path.GetFullPath(cachedPath);
+            var exists = File.Exists(cachedPath) || File.Exists(absoluteCachePath);
+            
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached('{version}'):");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Normalized: '{normalizedVersion}'");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Relative path: {cachedPath}");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Absolute path: {absoluteCachePath}");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Relative exists: {File.Exists(cachedPath)}");
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Absolute exists: {File.Exists(absoluteCachePath)}");
             
             // Additional validation: check file size (should be > 0)
             if (exists)
             {
                 try
                 {
-                    var fileInfo = new FileInfo(cachedPath);
+                    // Use the path that actually exists
+                    var actualPath = File.Exists(cachedPath) ? cachedPath : absoluteCachePath;
+                    var fileInfo = new FileInfo(actualPath);
                     if (fileInfo.Length == 0)
                     {
                         System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached: Cache file exists but is empty (0 bytes), treating as not cached");
                         return false;
                     }
-                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached('{version}') -> normalized: '{normalizedVersion}', path: {cachedPath}, exists: true, size: {fileInfo.Length} bytes");
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached: Cache file found at {actualPath}, size: {fileInfo.Length} bytes");
                 }
                 catch (Exception ex)
                 {
@@ -91,9 +112,10 @@ namespace MineServerGUI.Core
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached('{version}') -> normalized: '{normalizedVersion}', path: {cachedPath}, exists: false");
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached: Cache file not found at either path");
             }
             
+            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] IsVersionCached final result: {exists}");
             return exists;
         }
 
@@ -107,12 +129,21 @@ namespace MineServerGUI.Core
                 // Normalize version before looking up cache path
                 var normalizedVersion = version?.Trim() ?? string.Empty;
                 var cachedPath = GetCachePathForVersion(normalizedVersion);
+                var absoluteCachePath = Path.GetFullPath(cachedPath);
                 
-                if (!File.Exists(cachedPath))
+                // Try both relative and absolute paths
+                var actualCachePath = File.Exists(cachedPath) ? cachedPath : (File.Exists(absoluteCachePath) ? absoluteCachePath : null);
+                
+                if (actualCachePath == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] CopyFromCache: Cache file not found at: {cachedPath}");
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] CopyFromCache: Cache file not found at either path:");
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Relative: {cachedPath}");
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Absolute: {absoluteCachePath}");
                     return false;
                 }
+                
+                cachedPath = actualCachePath; // Use the path that exists
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] CopyFromCache: Using cache file at: {cachedPath}");
 
                 // Verify cache file is valid (not empty)
                 var cacheFileInfo = new FileInfo(cachedPath);
@@ -129,8 +160,40 @@ namespace MineServerGUI.Core
                     Directory.CreateDirectory(targetDir);
                 }
 
-                // Copy with overwrite
-                File.Copy(cachedPath, targetPath, overwrite: true);
+                // Copy with overwrite and retry logic to handle file locks
+                bool copySucceeded = false;
+                int maxRetries = 5;
+                int retryDelayMs = 200;
+                
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                {
+                    try
+                    {
+                        File.Copy(cachedPath, targetPath, overwrite: true);
+                        copySucceeded = true;
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] CopyFromCache: Copy succeeded (attempt {attempt})");
+                        break;
+                    }
+                    catch (IOException ioEx) when (ioEx.Message.Contains("being used by another process"))
+                    {
+                        if (attempt < maxRetries)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] File locked, retrying in {retryDelayMs}ms (attempt {attempt}/{maxRetries})...");
+                            System.Threading.Thread.Sleep(retryDelayMs);
+                            retryDelayMs += 100; // Increase delay each retry
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] CopyFromCache: Failed after {maxRetries} attempts: {ioEx.Message}");
+                            return false;
+                        }
+                    }
+                }
+                
+                if (!copySucceeded)
+                {
+                    return false;
+                }
                 
                 // Verify copy succeeded
                 if (!File.Exists(targetPath))
@@ -196,25 +259,73 @@ namespace MineServerGUI.Core
                         System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Created cache directory: {cacheDir}");
                     }
 
-                    // Copy to cache
-                    File.Copy(sourcePath, cachedPath, overwrite: true);
+                    // Copy to cache with retry logic to handle file locks
+                    bool copySucceeded = false;
+                    int maxRetries = 5;
+                    int retryDelayMs = 200;
                     
-                    // Verify copy succeeded
-                    if (File.Exists(cachedPath))
+                    for (int attempt = 1; attempt <= maxRetries; attempt++)
                     {
-                        var cachedFileInfo = new FileInfo(cachedPath);
-                        if (cachedFileInfo.Length == sourceFileInfo.Length && cachedFileInfo.Length > 0)
+                        try
                         {
-                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Successfully saved version '{normalizedVersion}' ({cachedFileInfo.Length} bytes) to cache: {cachedPath}");
+                            File.Copy(sourcePath, cachedPath, overwrite: true);
+                            copySucceeded = true;
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] File.Copy completed (attempt {attempt}): {sourcePath} -> {cachedPath}");
+                            break;
                         }
-                        else
+                        catch (IOException ioEx) when (ioEx.Message.Contains("being used by another process"))
                         {
-                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache save completed but file size mismatch - source: {sourceFileInfo.Length}, cache: {cachedFileInfo.Length}");
+                            if (attempt < maxRetries)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] File locked, retrying in {retryDelayMs}ms (attempt {attempt}/{maxRetries})...");
+                                System.Threading.Thread.Sleep(retryDelayMs);
+                                retryDelayMs *= 2; // Exponential backoff
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ File.Copy failed after {maxRetries} attempts: {ioEx.Message}");
+                                throw; // Re-throw after all retries exhausted
+                            }
                         }
+                        catch (Exception copyEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ File.Copy failed: {copyEx.Message}");
+                            throw; // Re-throw non-IO exceptions immediately
+                        }
+                    }
+                    
+                    if (!copySucceeded)
+                    {
+                        throw new IOException($"Failed to copy to cache after {maxRetries} attempts");
+                    }
+                    
+                    // CRITICAL: Verify copy succeeded immediately and explicitly
+                    // This ensures cache is actually saved before method returns
+                    System.Threading.Thread.Sleep(50); // Small delay for file system sync
+                    
+                    if (!File.Exists(cachedPath))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ ERROR: Cache file not found immediately after copy!");
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Source exists: {File.Exists(sourcePath)}");
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache directory exists: {Directory.Exists(cacheDir)}");
+                        return; // Exit early if copy failed
+                    }
+                    
+                    var cachedFileInfo = new FileInfo(cachedPath);
+                    if (cachedFileInfo.Length == 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ ERROR: Cache file is empty (0 bytes) after copy!");
+                        return; // Exit early if file is empty
+                    }
+                    
+                    if (cachedFileInfo.Length != sourceFileInfo.Length)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ WARNING: Cache file size mismatch - source: {sourceFileInfo.Length}, cache: {cachedFileInfo.Length}");
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache save completed but file not found at: {cachedPath}");
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ VERIFIED: Successfully saved version '{normalizedVersion}' ({cachedFileInfo.Length} bytes) to cache: {cachedPath}");
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Cache file verified: exists={File.Exists(cachedPath)}, size={cachedFileInfo.Length}, modified={cachedFileInfo.LastWriteTime}");
                     }
                 }
             }
@@ -281,15 +392,39 @@ namespace MineServerGUI.Core
                     Directory.CreateDirectory(_serverPath);
                 }
 
+                // Ensure cache directory exists (in case it was deleted)
+                if (!Directory.Exists(_cachePath))
+                {
+                    Directory.CreateDirectory(_cachePath);
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Created cache directory: {_cachePath}");
+                }
+
                 // Check cache first - if version exists in cache, copy from cache instead of downloading
                 // IMPORTANT: Only use cache for the EXACT version requested, not any other version
                 // Cache check happens BEFORE overwrite logic - cache should always be used if available
                 // This prevents unnecessary downloads when the file is already cached
+                // This is especially important for users with slow internet or data limits
+                var cachePath = GetCachePathForVersion(version);
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Cache check for version '{version}':");
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Normalized version: '{version.Trim()}'");
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache path: {cachePath}");
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache directory exists: {Directory.Exists(Path.GetDirectoryName(cachePath))}");
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache file exists: {File.Exists(cachePath)}");
+                
                 var cacheCheckResult = IsVersionCached(version);
+                System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - IsVersionCached result: {cacheCheckResult}");
+                
+                if (File.Exists(cachePath))
+                {
+                    var cacheFileInfo = new FileInfo(cachePath);
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache file size: {cacheFileInfo.Length} bytes");
+                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - Cache file last modified: {cacheFileInfo.LastWriteTime}");
+                }
+                
                 if (cacheCheckResult)
                 {
                     System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Version '{version}' found in cache, using cached copy");
-                    OnDownloadProgress(new DownloadProgressEventArgs { Status = $"Version {version} found in cache, copying...", Progress = 10 });
+                    OnDownloadProgress(new DownloadProgressEventArgs { Status = $"✓ Using cached version {version} (no download needed)...", Progress = 10 });
                     
                     // Always delete existing file if overwriting
                     if (overwrite && ServerJarExists())
@@ -315,7 +450,7 @@ namespace MineServerGUI.Core
                             if (fileInfo.Length > 0)
                             {
                                 System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Successfully used cached version '{version}' ({fileInfo.Length} bytes) - NO DOWNLOAD NEEDED");
-                                OnDownloadProgress(new DownloadProgressEventArgs { Status = $"✓ Using cached version {version} (no download needed)", Progress = 100 });
+                                OnDownloadProgress(new DownloadProgressEventArgs { Status = $"✓ Using cached version {version} ({fileInfo.Length / 1024 / 1024} MB) - No download needed!", Progress = 100 });
                                 return true; // ✅ SUCCESS - Return early, don't proceed to download
                             }
                             else
@@ -339,6 +474,38 @@ namespace MineServerGUI.Core
                 else
                 {
                     System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✗ Version '{version}' NOT found in cache, will download");
+                    
+                    // Diagnostic: List all cached versions to help debug
+                    try
+                    {
+                        if (Directory.Exists(_cachePath))
+                        {
+                            var cachedVersions = Directory.GetDirectories(_cachePath);
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Diagnostic: Found {cachedVersions.Length} cached version(s):");
+                            foreach (var versionDir in cachedVersions)
+                            {
+                                var versionName = Path.GetFileName(versionDir);
+                                var jarPath = Path.Combine(versionDir, "server.jar");
+                                if (File.Exists(jarPath))
+                                {
+                                    var fi = new FileInfo(jarPath);
+                                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - {versionName}: {jarPath} ({fi.Length} bytes, modified: {fi.LastWriteTime})");
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader]   - {versionName}: directory exists but server.jar not found");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Diagnostic: Cache directory does not exist: {_cachePath}");
+                        }
+                    }
+                    catch (Exception diagEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] Diagnostic error: {diagEx.Message}");
+                    }
                 }
 
                 // Always delete existing file if overwriting
@@ -413,7 +580,7 @@ namespace MineServerGUI.Core
                 var downloadUrl = versionDetails.downloads.server.url;
                 var fileSize = versionDetails.downloads.server.size;
 
-                OnDownloadProgress(new DownloadProgressEventArgs { Status = $"Downloading server.jar ({fileSize / 1024 / 1024} MB)...", Progress = 20 });
+                OnDownloadProgress(new DownloadProgressEventArgs { Status = $"⬇ Downloading server.jar {version} ({fileSize / 1024 / 1024} MB)...", Progress = 20 });
 
                 // Download server.jar
                 using var response = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
@@ -450,27 +617,72 @@ namespace MineServerGUI.Core
                     }
                 }
 
-                OnDownloadProgress(new DownloadProgressEventArgs { Status = "Download complete!", Progress = 100 });
+                OnDownloadProgress(new DownloadProgressEventArgs { Status = $"✓ Download complete! Saving to cache...", Progress = 95 });
                 
-                // Save downloaded file to cache for future reuse
-                // This MUST happen after download completes successfully
-                try
+                // Save to cache AFTER download completes and streams are closed
+                // Use retry logic to handle any remaining file locks
+                await Task.Delay(500); // Delay to ensure file is fully released by OS
+                
+                var versionCachePath = GetCachePathForVersion(version);
+                var versionCacheDir = Path.GetDirectoryName(versionCachePath);
+                
+                if (!string.IsNullOrEmpty(versionCacheDir))
                 {
-                    SaveToCache(version, _serverJar);
-                    var cachePath = GetCachePathForVersion(version);
-                    if (File.Exists(cachePath))
+                    if (!Directory.Exists(versionCacheDir))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Successfully saved version '{version}' to cache: {cachePath}");
+                        Directory.CreateDirectory(versionCacheDir);
                     }
-                    else
+                    
+                    // Copy to cache with retry logic
+                    bool cacheSaved = false;
+                    int maxRetries = 10;
+                    int retryDelayMs = 500;
+                    
+                    for (int attempt = 1; attempt <= maxRetries; attempt++)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Warning: Cache save reported success but file not found at: {cachePath}");
+                        try
+                        {
+                            File.Copy(_serverJar, versionCachePath, overwrite: true);
+                            cacheSaved = true;
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Saved to cache (attempt {attempt}): {versionCachePath}");
+                            
+                            // Verify cache file
+                            if (File.Exists(versionCachePath))
+                            {
+                                var cacheInfo = new FileInfo(versionCachePath);
+                                var sourceInfo = new FileInfo(_serverJar);
+                                if (cacheInfo.Length == sourceInfo.Length && cacheInfo.Length > 0)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ✓ Cache verified: {cacheInfo.Length} bytes");
+                                    OnDownloadProgress(new DownloadProgressEventArgs { Status = $"✓ Download complete! Cached {version} ({cacheInfo.Length / 1024 / 1024} MB) for future use", Progress = 100 });
+                                }
+                            }
+                            break;
+                        }
+                        catch (IOException ioEx) when (ioEx.Message.Contains("being used by another process"))
+                        {
+                            if (attempt < maxRetries)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] File locked, retrying in {retryDelayMs}ms (attempt {attempt}/{maxRetries})...");
+                                await Task.Delay(retryDelayMs);
+                                retryDelayMs += 200; // Increase delay each retry
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Failed to save cache after {maxRetries} attempts: {ioEx.Message}");
+                            }
+                        }
+                        catch (Exception cacheEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache save failed: {cacheEx.Message}");
+                            break;
+                        }
                     }
-                }
-                catch (Exception cacheEx)
-                {
-                    // Log but don't fail the download
-                    System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache save failed (non-critical): {cacheEx.Message}");
+                    
+                    if (!cacheSaved)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ServerDownloader] ⚠ Cache save failed (non-critical), download succeeded");
+                    }
                 }
                 
                 return true;
