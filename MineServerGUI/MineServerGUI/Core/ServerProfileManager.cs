@@ -39,9 +39,10 @@ namespace MineServerGUI.Core
         {
             if (!File.Exists(_profilesConfigPath))
             {
+                // No profiles file exists - don't create default profile yet
+                // Let the setup wizard create the first profile
                 _profiles = new List<ServerProfile>();
-                // Create default profile if none exist
-                CreateDefaultProfile();
+                _currentProfile = null;
                 return;
             }
 
@@ -50,10 +51,11 @@ namespace MineServerGUI.Core
                 var json = File.ReadAllText(_profilesConfigPath);
                 _profiles = JsonConvert.DeserializeObject<List<ServerProfile>>(json) ?? new List<ServerProfile>();
                 
-                // If no profiles exist, create default
+                // If no profiles exist, don't create default - let setup wizard handle it
                 if (_profiles.Count == 0)
                 {
-                    CreateDefaultProfile();
+                    _currentProfile = null;
+                    return;
                 }
                 else
                 {
@@ -116,8 +118,9 @@ namespace MineServerGUI.Core
             }
             catch
             {
+                // On error, don't create default profile - let setup wizard handle it
                 _profiles = new List<ServerProfile>();
-                CreateDefaultProfile();
+                _currentProfile = null;
             }
         }
 
